@@ -8,17 +8,17 @@ object Main {
 
   def main(args: Array[String]): Unit = {
     // args.head == /path/to/tsconfig.json
-    writeMill(Paths.get("."), args.head, "package", true, true)
+    val tsConfig = Paths.get(args.head)
+    writeMill(tsConfig.getParent, tsConfig, "package", true, true)
   }
 
-  def writeMill(dir: Path, tsConfigNameWithPath: String, moduleName: String, isObject: Boolean, isRootModule: Boolean = false): Unit = {
-    val tsConfig = dir.resolve(tsConfigNameWithPath)
-    val tsConfigDir = tsConfig.getParent
-    val tsConfigText = Files.readString(tsConfig, StandardCharsets.UTF_8)
+  def writeMill(projectDir: Path, tsConfigPath: Path, moduleName: String, isObject: Boolean, isRootModule: Boolean = false): Unit = {
+    val tsConfigDir = tsConfigPath.getParent
+    val tsConfigText = Files.readString(tsConfigPath, StandardCharsets.UTF_8)
     try {
-      if (tsConfig.getName(tsConfig.getNameCount - 1).toString.equalsIgnoreCase("tsconfig.json")) {
+      if (tsConfigPath.getName(tsConfigPath.getNameCount - 1).toString.equalsIgnoreCase("tsconfig.json")) {
         val packageText = Files.readString(tsConfigDir.resolve("package.json"), StandardCharsets.UTF_8)
-        val packageMillText = genPackageMillText(tsConfigDir, read[TsPackage](packageText), read[TsConfig](tsConfigText), moduleName, isObject, isRootModule)
+        val packageMillText = genPackageMillText(projectDir, tsConfigDir, read[TsPackage](packageText), read[TsConfig](tsConfigText), moduleName, isObject, isRootModule)
         val fileName = if (isRootModule) {
           "build.mill"
         } else {
@@ -26,112 +26,63 @@ object Main {
         }
         Files.writeString(tsConfigDir.resolve(fileName), packageMillText, StandardCharsets.UTF_8)
       } else {
-        val packageMillText = genPackageMillText(tsConfigDir, TsPackage(), read[TsConfig](tsConfigText), moduleName, isObject, isRootModule)
+        val packageMillText = genPackageMillText(projectDir, tsConfigDir, TsPackage(), read[TsConfig](tsConfigText), moduleName, isObject, isRootModule)
         Files.writeString(tsConfigDir.resolve(s"$moduleName.mill"), packageMillText, StandardCharsets.UTF_8)
       }
     } catch {
       case ex: Throwable =>
-        println(dir, tsConfigNameWithPath, moduleName, isObject)
+        println(tsConfigPath, moduleName, isObject)
         println(tsConfigText)
         throw ex
     }
   }
 
-  def genPackageMillText(dir: Path, tsPackage: TsPackage, tsConfig: TsConfig, moduleName: String, isObject: Boolean, isRootModule: Boolean): String = {
+  def genPackageMillText(projectDir: Path, tsConfigPath: Path, tsPackage: TsPackage, tsConfig: TsConfig, moduleName: String, isObject: Boolean, isRootModule: Boolean): String = {
     tsConfig.references.flatMap(_.values).filterNot(_.endsWith(".json")).foreach { reference =>
-      val packageDir = dir.resolve(reference)
-      val subModuleName = packageDir.getName(packageDir.getNameCount - 1).toString
-      writeMill(packageDir, "tsconfig.json", subModuleName, true)
+      val packageDir = tsConfigPath.resolve(reference)
+      writeMill(projectDir, packageDir.resolve("tsconfig.json"), "package", true)
     }
     tsConfig.references.flatMap(_.values).filter(_.endsWith(".json")).foreach { reference =>
-      val tsConfig = dir.resolve(reference)
-      val tsConfigDir = tsConfig.getParent
-      val parentTsConfigNameWithPath = tsConfig.getName(tsConfig.getNameCount - 1).toString
-      val parentModuleName = parentTsConfigNameWithPath.replace("tsconfig.", "").replace(".json", "")
-      writeMill(tsConfigDir, parentTsConfigNameWithPath, parentModuleName, true)
+      val tsConfig = tsConfigPath.resolve(reference)
+      val parentModuleName = getModuleName(tsConfig)
+      writeMill(projectDir, tsConfig, parentModuleName, true)
     }
     tsConfig.`extends`.foreach { extend =>
-      val tsConfig = dir.resolve(extend)
-      val tsConfigDir = tsConfig.getParent
-      val parentModuleName = tsConfig.getName(tsConfig.getNameCount - 1).toString
-      writeMill(tsConfigDir, parentModuleName, parentModuleName.replace("tsconfig.", "").replace(".json", ""), false)
+      val tsConfig = tsConfigPath.resolve(extend)
+      val parentModuleName = getModuleName(tsConfig)
+      writeMill(projectDir, tsConfig, parentModuleName, false)
     }
-    val packageName = if (isRootModule || dir.getName(dir.getNameCount - 1).toString.equalsIgnoreCase(moduleName) || dir.getName(dir.getNameCount - 1).toString.equalsIgnoreCase(".")) {
-      "build"
+    val packageName = if (isRootModule || getModuleName(tsConfigPath).equalsIgnoreCase(".")) {
+      "build\nimport $packages._"
     } else {
-      s"build.`${dir.getName(dir.getNameCount - 1).toString}`"
+      s"build.${getPackagePath(projectDir, tsConfigPath)}"
     }
 
     s"""package $packageName
        |
        |import mill._, javascriptlib._
        |
-       |${if (isObject) "object" else "trait"} `$moduleName` extends ${if (isRootModule) "RootModule with" else ""} TypeScriptModule ${
+       |${if (isObject) "object" else "trait"} `$moduleName` extends ${if (isRootModule) "RootModule" else "TypeScriptModule"}  ${
       tsConfig.`extends`.map { extend =>
-        val tsConfig = dir.resolve(extend)
-        val parentModuleName = tsConfig.getName(tsConfig.getNameCount - 1).toString
-
-        s"with build.`${parentModuleName.replace("tsconfig.", "").replace(".json", "")}` "
+        val tsConfig = tsConfigPath.resolve(extend)
+        if (extend.endsWith(".json")) {
+          val parentModuleName = getModuleName(tsConfig)
+          s"with build.`$parentModuleName` "
+        } else {
+          val parentModuleName = getPackagePath(projectDir, tsConfig)
+          s"with build.$parentModuleName "
+        }
       }.getOrElse("")
     }{
-       |  ${
-      if (tsConfig.references.nonEmpty)
-        s"""
-       |  def moduleDeps = Seq(
-       |    ${
-          tsConfig.references.flatMap(_.values).map { reference =>
-            val packageDir = dir.resolve(reference)
-            val subModuleName = packageDir.getName(packageDir.getNameCount - 1).toString
-            if (reference.endsWith(".json")) {
-              if (packageDir.getParent == dir) {
-                s"build.`${dir.getName(dir.getNameCount - 1).toString}`.`${subModuleName.replace("tsconfig.", "").replace(".json", "")}`"
-              } else {
-                ""
-              }
-            } else {
-              s"build.`$subModuleName`"
-            }
-          }.filter(_.nonEmpty).mkString(",\n    ")
-        }
-       |  )
-       |  """ else ""
-    }
-       |  ${
-      if (tsConfig.`include`.nonEmpty)
-        s"""
-           |  def sources = Task.Source(${tsConfig.`include`.map(str => s"\"$str\"").mkString(", ")})
-           |  """ else ""
-    }
-       |  ${
-      if (tsConfig.compilerOptions.nonEmpty)
-        s"""
-       |  def compilerOptions = super.compilerOptions() ++ Map(
-       |    ${
-          tsConfig.compilerOptions.map {
-            case (k, v) => s"\"$k\" -> ${valueToString(v)}"
-          }.mkString(",\n    ")
-        }
-       |  )
-       |  """ else ""
-    }
-       |  ${
-      if (tsPackage.dependencies.nonEmpty)
-        s"""
-           |  def npmDeps = super.npmDeps() + Seq(
-           |    ${tsPackage.dependencies.map { case (k, v) => s"\"$k@$v\"" }.mkString(",\n    ")}
-           |  )
-           |  """ else ""
-    }
-       |  ${
-      if (tsPackage.devDependencies.nonEmpty)
-        s"""
-           |  def npmDevDeps = super.npmDevDeps() + Seq(
-           |    ${tsPackage.devDependencies.map { case (k, v) => s"\"$k@$v\"" }.mkString(",\n    ")}
-           |  )
-           |  """ else ""
-    }
-       |}""".stripMargin
+       |${tsConfig.getModuleDeps(projectDir, tsConfigPath, pad)}
+       |${tsConfig.getSources(pad)}
+       |${tsConfig.getCompilerOptions(pad)}
+       |${tsPackage.getNpmDeps(pad)}
+       |${tsPackage.getNpmDevDeps(pad)}
+       |}""".stripMargin.replaceAll("\n{3,}","\n")
   }
+
+  val pad = 2
 
   def valueToString(value: ujson.Value): String = value match {
     case ujson.Str(v) => s"ujson.Str(\"$v\")"
@@ -146,4 +97,16 @@ object Main {
     case ujson.Null => "null"
   }
 
+  def getPackagePath(projectDir: Path, tsConfigPath: Path): String = {
+    tsConfigPath.normalize().toString
+      .replace(projectDir.normalize().toString, "")
+      .dropWhile(_ == '/')
+      .split('/')
+      .mkString("`", "`.`", "`")
+  }
+
+  def getModuleName(tsConfigPath: Path): String = {
+    tsConfigPath.getName(tsConfigPath.getNameCount - 1).toString
+      .replace("tsconfig.", "").replace(".json", "")
+  }
 }
