@@ -8,7 +8,7 @@ case class TsConfig(`extends`: Option[String] = None, `include`: List[String] = 
   def getSources(pad: Int): String = {
     if (`include`.nonEmpty) {
       s"""
-         |${" " * pad}def sources = Task.Source(${`include`.map(str => s"\"$str\"").mkString(", ")})
+         |${" " * pad}override def sources: Target[Seq[PathRef]] = Task.Source(${`include`.map(str => s"\"$str\"").mkString(", ")})
          |""".stripMargin
     } else {
       ""
@@ -18,7 +18,7 @@ case class TsConfig(`extends`: Option[String] = None, `include`: List[String] = 
   def getCompilerOptions(pad: Int): String = {
     if (compilerOptions.nonEmpty) {
       s"""
-         |${" " * pad}def compilerOptions = super.compilerOptions() ++ Map(
+         |${" " * pad}override def compilerOptions: T[Map[String, ujson.Value]] = super.compilerOptions() ++ Map(
          |${" " * pad * 2}${
         compilerOptions.map {
           case (k, v) => s"\"$k\" -> ${Main.valueToString(v)}"
@@ -49,7 +49,7 @@ case class TsConfig(`extends`: Option[String] = None, `include`: List[String] = 
 
     if (res.nonEmpty) {
       s"""
-         |${" " * pad}def moduleDeps = Seq(
+         |${" " * pad}override def moduleDeps: Seq[TypeScriptModule] = Seq(
          |${" " * pad * 2}$res
          |${" " * pad})
          |""".stripMargin

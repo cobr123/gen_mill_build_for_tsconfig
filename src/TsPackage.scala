@@ -5,7 +5,7 @@ case class TsPackage(scripts: Map[String, String] = Map.empty, dependencies: Map
   def getNpmDeps(pad: Int): String = {
     if (dependencies.nonEmpty) {
       s"""
-         |${" " * pad}def npmDeps = super.npmDeps() ++ Seq(
+         |${" " * pad}override def npmDeps: T[Seq[String]] = super.npmDeps() ++ Seq(
          |${" " * pad * 2}${dependencies.map { case (k, v) => s"\"$k@$v\"" }.mkString(s",\n${" " * pad * 2}")}
          |${" " * pad})
          |""".stripMargin
@@ -17,7 +17,7 @@ case class TsPackage(scripts: Map[String, String] = Map.empty, dependencies: Map
   def getNpmDevDeps(pad: Int): String = {
     if (devDependencies.nonEmpty) {
       s"""
-         |${" " * pad}def npmDevDeps = super.npmDevDeps() ++ Seq(
+         |${" " * pad}override def npmDevDeps: T[Seq[String]] = super.npmDevDeps() ++ Seq(
          |${" " * pad * 2}${devDependencies.map { case (k, v) => s"\"$k@$v\"" }.mkString(s",\n${" " * pad * 2}")}
          |${" " * pad})
          |""".stripMargin
