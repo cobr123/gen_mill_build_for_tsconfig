@@ -3,6 +3,7 @@ import upickle.default._
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
+import scala.annotation.tailrec
 
 object Main {
 
@@ -29,11 +30,23 @@ object Main {
         val packageMillText = genPackageMillText(projectDir, tsConfigDir, TsPackage(), read[TsConfig](tsConfigText), moduleName, isObject, isRootModule)
         Files.writeString(tsConfigDir.resolve(s"$moduleName.mill"), packageMillText, StandardCharsets.UTF_8)
       }
+      addEmptyPackage(projectDir, tsConfigPath)
     } catch {
       case ex: Throwable =>
         println(tsConfigPath, moduleName, isObject)
         println(tsConfigText)
         throw ex
+    }
+  }
+
+  @tailrec
+  def addEmptyPackage(projectDir: Path, tsConfigPath: Path): Unit = {
+    if (projectDir != tsConfigPath) {
+      if (!tsConfigPath.getParent.resolve("tsconfig.json").toFile.exists()) {
+        val packageMillText = s"package build.${getPackagePath(projectDir, tsConfigPath.getParent)}"
+        Files.writeString(tsConfigPath.getParent.resolve("package.mill"), packageMillText, StandardCharsets.UTF_8)
+      }
+      addEmptyPackage(projectDir, tsConfigPath.getParent)
     }
   }
 
@@ -62,12 +75,12 @@ object Main {
        |
        |import mill._, javascriptlib._
        |
-       |${if (isObject) "object" else "trait"} `$moduleName` extends ${if (isRootModule) "RootModule" else "TypeScriptModule"}  ${
+       |${if (isObject) "object" else "trait"} ${getQuotedName(moduleName)} extends ${if (isObject) "RootModule" else "TypeScriptModule"}  ${
       tsConfig.`extends`.map { extend =>
         val tsConfig = tsConfigPath.resolve(extend)
         if (extend.endsWith(".json")) {
           val parentModuleName = getModuleName(tsConfig)
-          s"with build.`$parentModuleName` "
+          s"with build.$parentModuleName "
         } else {
           val parentModuleName = getPackagePath(projectDir, tsConfig)
           s"with build.$parentModuleName "
@@ -79,7 +92,7 @@ object Main {
        |${tsConfig.getCompilerOptions(pad)}
        |${tsPackage.getNpmDeps(pad)}
        |${tsPackage.getNpmDevDeps(pad)}
-       |}""".stripMargin.replaceAll("\n{3,}","\n")
+       |}""".stripMargin.replaceAll("\n{3,}", "\n")
   }
 
   val pad = 2
@@ -102,11 +115,22 @@ object Main {
       .replace(projectDir.normalize().toString, "")
       .dropWhile(_ == '/')
       .split('/')
-      .mkString("`", "`.`", "`")
+      .map(getQuotedName)
+      .mkString(".")
   }
 
   def getModuleName(tsConfigPath: Path): String = {
-    tsConfigPath.getName(tsConfigPath.getNameCount - 1).toString
-      .replace("tsconfig.", "").replace(".json", "")
+    getQuotedName(
+      tsConfigPath.getName(tsConfigPath.getNameCount - 1).toString
+        .replace("tsconfig.", "").replace(".json", "")
+    )
+  }
+
+  def getQuotedName(str: String): String = {
+    if (str.contains('-') || str.equalsIgnoreCase("package")) {
+      s"`$str`"
+    } else {
+      str
+    }
   }
 }
